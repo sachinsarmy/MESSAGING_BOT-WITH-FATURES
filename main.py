@@ -1,0 +1,303 @@
+import os
+import logging
+import sqlite3
+import asyncio
+from telegram.ext import MessageHandler, filters
+from telegram import Update
+from db import add_user, get_all_users, remove_user
+from telegram.ext import (
+    Application,
+    ContextTypes,
+    ChatJoinRequestHandler,
+    CommandHandler,
+)
+
+
+from telegram.error import Forbidden, BadRequest, TimedOut, NetworkError, RetryAfter
+
+# ================= CONFIG =================
+BOT_TOKEN = "8419709904:AAHZj2v9_qwvC8Pw_ksX53EATcSaSTwHSkM"
+ADMIN_ID = [7849592882]
+APK_PATH = "𝗥ᴀᴊᴀ_𝗚ᴀᴍᴇ_𝗣ᴀɴᴇʟ_𝗛ᴀᴄᴋ.apk"
+VOICE_PATH = "VOICEHACK.ogg"
+DB_NAME = "users.db"
+# ==========================================
+
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+
+# ================= DATABASE =================
+def get_conn():
+    return sqlite3.connect(DB_NAME)
+
+
+def add_user(user_id: int):
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)"
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO users (user_id) VALUES (?)",
+                (user_id,),
+            )
+            conn.commit()
+    except Exception as e:
+        logging.error(f"Add user error: {e}")
+
+
+def get_all_users():
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)"
+            )
+            cursor = conn.execute("SELECT user_id FROM users")
+            return [row[0] for row in cursor.fetchall()]
+    except Exception as e:
+        logging.error(f"Get users error: {e}")
+        return []
+
+
+def remove_user(user_id: int):
+    try:
+        with get_conn() as conn:
+            conn.execute("DELETE FROM users WHERE user_id=?", (user_id,))
+            conn.commit()
+    except Exception as e:
+        logging.error(f"Remove user error: {e}")
+
+# ================= COMMON SEND =================
+async def send_welcome_package(user, context: ContextTypes.DEFAULT_TYPE):
+    add_user(user.id)
+
+    welcome_message = f"""
+👋🏻 𝐖𝐄𝐋𝐂𝐎𝐌𝐄 {user.mention_html()} 𝐁𝐑𝐎𝐓𝐇𝐄𝐑 𝐓𝐎 𝗢𝗨𝗥 - 𝐑𝐀𝐉𝐀 𝐏𝐑𝐈𝐕𝐀𝐓𝐄 𝐇𝐀𝐂𝐊 𝐒𝐄𝐑𝐕𝐄𝐑 🤑💵
+"""
+
+    try:
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=welcome_message,
+            parse_mode="HTML",
+        )
+    except Exception:
+        return
+
+    # ---------- APK ----------
+    if os.path.exists(APK_PATH):
+        try:
+            with open(APK_PATH, "rb") as apk:
+                await context.bot.send_document(
+                    chat_id=user.id,
+                    document=apk,
+                    caption="""📂 ☆𝟏𝟎𝟎% 𝐍𝐔𝐌𝐁𝐄𝐑 𝐇𝐀𝐂𝐊💸
+
+(केवल प्रीमियम उपयोगकर्ताओं के लिए)💎
+(𝟏𝟎𝟎% नुकसान की भरपाई की गारंटी)🧬
+
+♻सहायता के लिए @RDX_SONU_01
+🔴हैक का उपयोग कैसे करें
+https://t.me/rajaindiaprediction/54""",
+                )
+        except Exception as e:
+            logging.error(f"APK send error: {e}")
+
+    # ---------- VOICE ----------
+    if os.path.exists(VOICE_PATH):
+        try:
+            with open(VOICE_PATH, "rb") as voice:
+                await context.bot.send_voice(
+                    chat_id=user.id,
+                    voice=voice,
+                    caption="""🎙 सदस्य 9X गुना लाभ का प्रमाण 👇🏻
+https://t.me/rajaindiaprediction/56
+
+♻सहायता के लिए @RDX_SONU_01
+लगातार नंबर पे नंबर जीतना 🤑♻👑""",
+                )
+        except Exception as e:
+            logging.error(f"Voice send error: {e}")
+
+
+# ================= /START =================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    add_user(user.id)
+    logging.info(f"User added: {user.id}")
+
+    await send_welcome_package(user, context)
+    
+    # ✅ STEP 1 — ADD HERE
+async def capture_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user:
+        add_user(user.id)
+
+
+# ================= JOIN REQUEST =================
+async def approve_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    request = update.chat_join_request
+    if not request:
+        return
+
+    user = request.from_user
+    await send_welcome_package(user, context)
+
+# ================= PRO BROADCAST =================
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    if not update.message.reply_to_message:
+        await update.message.reply_text("❗ Reply to a message to broadcast.")
+        return
+
+    include_admin = False
+    if context.args and context.args[0].lower() == "all":
+        include_admin = True
+
+    # ✅ Get users
+    all_users = get_all_users()
+    users = [u for u in all_users if include_admin or u != ADMIN_ID]
+
+    total_users = len(users)
+
+    if total_users == 0:
+        await update.message.reply_text("⚠️ No users in database.")
+        return
+
+    progress_msg = await update.message.reply_text(
+        f"🚀 Broadcast started...\n\n👥 Total Users: {total_users}"
+    )
+
+    delivered = 0
+    failed = 0
+    removed = 0
+
+    # 🔥 chunk size (ANTI FLOOD)
+    BATCH_SIZE = 25
+    DELAY = 1.2  # seconds between batches
+
+    for i in range(0, total_users, BATCH_SIZE):
+        batch = users[i:i + BATCH_SIZE]
+
+        tasks = []
+        for user_id in batch:
+            tasks.append(
+                send_copy_safe(
+                    context,
+                    update.message.reply_to_message,
+                    user_id
+                )
+            )
+
+        results = await asyncio.gather(*tasks)
+
+        # ✅ process results
+        for result, user_id in zip(results, batch):
+            if result == "ok":
+                delivered += 1
+            elif result == "blocked":
+                remove_user(user_id)
+                removed += 1
+                failed += 1
+            else:
+                failed += 1
+
+
+        # progress animation
+        if i % 10 == 0 or i == total_users:
+            percent = int((i / total_users) * 100)
+            try:
+                await progress_msg.edit_text(
+                    f"""🚀 Broadcasting…\n\n"
+                    f"📊 Progress: {percent}%"""
+                )
+            except Exception:
+                pass
+
+# ✅ live progress update every batch
+        try:
+            await progress_msg.edit_text(
+                f"🚀 Broadcasting...\n\n"
+                f"👥 Total: {total_users}\n"
+                f"✅ Delivered: {delivered}\n"
+                f"❌ Failed: {failed}\n"
+                f"🗑 Removed: {removed}"
+            )
+        except:
+            pass
+
+        await asyncio.sleep(DELAY)
+
+    # ✅ final report
+    await progress_msg.edit_text(
+        f"✅ Broadcast Completed!\n\n"
+        f"👥 Total: {total_users}\n"
+        f"✅ Delivered: {delivered}\n"
+        f"❌ Failed: {failed}\n"
+        f"🗑 Removed: {removed}"
+    )
+    
+    
+    
+    
+    
+    async def send_copy_safe(context, message, user_id):
+    try:
+        await message.copy(chat_id=user_id)
+        return "ok"
+
+    except Forbidden:
+        return "blocked"
+
+    except RetryAfter as e:
+        await asyncio.sleep(e.retry_after)
+        try:
+            await message.copy(chat_id=user_id)
+            return "ok"
+        except:
+            return "failed"
+
+    except (BadRequest, TimedOut, NetworkError):
+        return "failed"
+
+    except Exception as e:
+        logging.error(f"Send error {user_id}: {e}")
+        return "failed"
+
+
+
+
+# ================= USERS COUNT =================
+async def users_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    total = len(get_all_users())
+    await update.message.reply_text(f"👥 Total Users: {total}")
+
+
+# ================= MAIN =================
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(CommandHandler("users", users_count))
+    app.add_handler(ChatJoinRequestHandler(approve_and_send))
+
+    # ✅ AUTO USER CAPTURE — ALWAYS LAST
+    app.add_handler(MessageHandler(filters.ALL, capture_user))
+
+    app.run_polling(allowed_updates=["message", "chat_join_request"])
+
+
+if __name__ == "__main__":
+    main()
+
+
+
