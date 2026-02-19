@@ -1,26 +1,25 @@
 import os
 import logging
-import sqlite3
 import asyncio
-from telegram.ext import MessageHandler, filters
+
 from telegram import Update
-from db import add_user, get_all_users, remove_user
+from telegram.error import Forbidden, BadRequest, TimedOut, NetworkError, RetryAfter
 from telegram.ext import (
     Application,
     ContextTypes,
     ChatJoinRequestHandler,
     CommandHandler,
+    MessageHandler,
+    filters,
 )
 
-
-from telegram.error import Forbidden, BadRequest, TimedOut, NetworkError, RetryAfter
+from db import add_user, get_all_users, remove_user, init_db
 
 # ================= CONFIG =================
-BOT_TOKEN = "8419709904:AAHZj2v9_qwvC8Pw_ksX53EATcSaSTwHSkM"
-ADMIN_ID = [7849592882]
+BOT_TOKEN = "7539536706:AAHk4mgyqv7AHw9tWHqA7K_5d1qNOgFXPQ8"
+ADMIN_ID = [7849592882]  # ✅ multi admin supported
 APK_PATH = "𝗥ᴀᴊᴀ_𝗚ᴀᴍᴇ_𝗣ᴀɴᴇʟ_𝗛ᴀᴄᴋ.apk"
 VOICE_PATH = "VOICEHACK.ogg"
-DB_NAME = "users.db"
 # ==========================================
 
 logging.basicConfig(
@@ -28,48 +27,7 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-# ================= DATABASE =================
-def get_conn():
-    return sqlite3.connect(DB_NAME)
-
-
-def add_user(user_id: int):
-    try:
-        with get_conn() as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)"
-            )
-            conn.execute(
-                "INSERT OR IGNORE INTO users (user_id) VALUES (?)",
-                (user_id,),
-            )
-            conn.commit()
-    except Exception as e:
-        logging.error(f"Add user error: {e}")
-
-
-def get_all_users():
-    try:
-        with get_conn() as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)"
-            )
-            cursor = conn.execute("SELECT user_id FROM users")
-            return [row[0] for row in cursor.fetchall()]
-    except Exception as e:
-        logging.error(f"Get users error: {e}")
-        return []
-
-
-def remove_user(user_id: int):
-    try:
-        with get_conn() as conn:
-            conn.execute("DELETE FROM users WHERE user_id=?", (user_id,))
-            conn.commit()
-    except Exception as e:
-        logging.error(f"Remove user error: {e}")
-
-# ================= COMMON SEND =================
+# ================= WELCOME PACKAGE =================
 async def send_welcome_package(user, context: ContextTypes.DEFAULT_TYPE):
     add_user(user.id)
 
@@ -86,7 +44,7 @@ async def send_welcome_package(user, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         return
 
-    # ---------- APK ----------
+    # APK
     if os.path.exists(APK_PATH):
         try:
             with open(APK_PATH, "rb") as apk:
@@ -105,7 +63,7 @@ https://t.me/rajaindiaprediction/54""",
         except Exception as e:
             logging.error(f"APK send error: {e}")
 
-    # ---------- VOICE ----------
+    # VOICE
     if os.path.exists(VOICE_PATH):
         try:
             with open(VOICE_PATH, "rb") as voice:
@@ -122,15 +80,16 @@ https://t.me/rajaindiaprediction/56
             logging.error(f"Voice send error: {e}")
 
 
-# ================= /START =================
+# ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     add_user(user.id)
     logging.info(f"User added: {user.id}")
 
     await send_welcome_package(user, context)
-    
-    # ✅ STEP 1 — ADD HERE
+
+
+# ================= AUTO CAPTURE =================
 async def capture_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user:
@@ -146,22 +105,43 @@ async def approve_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = request.from_user
     await send_welcome_package(user, context)
 
-# ================= PRO BROADCAST =================
+
+# ================= SAFE COPY =================
+async def send_copy_safe(context, message, user_id):
+    try:
+        await message.copy(chat_id=user_id)
+        return "ok"
+
+    except Forbidden:
+        return "blocked"
+
+    except RetryAfter as e:
+        await asyncio.sleep(e.retry_after)
+        try:
+            await message.copy(chat_id=user_id)
+            return "ok"
+        except Exception:
+            return "failed"
+
+    except (BadRequest, TimedOut, NetworkError):
+        return "failed"
+
+    except Exception as e:
+        logging.error(f"Copy error for {user_id}: {e}")
+        return "failed"
+
+
+# ================= BROADCAST =================
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id not in ADMIN_ID:
         return
 
     if not update.message.reply_to_message:
         await update.message.reply_text("❗ Reply to a message to broadcast.")
         return
 
-    include_admin = False
-    if context.args and context.args[0].lower() == "all":
-        include_admin = True
-
-    # ✅ Get users
     all_users = get_all_users()
-    users = [u for u in all_users if include_admin or u != ADMIN_ID]
+    users = [u for u in all_users if u not in ADMIN_ID]
 
     total_users = len(users)
 
@@ -177,49 +157,29 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     failed = 0
     removed = 0
 
-    # 🔥 chunk size (ANTI FLOOD)
     BATCH_SIZE = 25
-    DELAY = 1.2  # seconds between batches
+    DELAY = 1.2
 
     for i in range(0, total_users, BATCH_SIZE):
         batch = users[i:i + BATCH_SIZE]
 
-        tasks = []
-        for user_id in batch:
-            tasks.append(
-                send_copy_safe(
-                    context,
-                    update.message.reply_to_message,
-                    user_id
-                )
-            )
+        tasks = [
+            send_copy_safe(context, update.message.reply_to_message, uid)
+            for uid in batch
+        ]
 
         results = await asyncio.gather(*tasks)
 
-        # ✅ process results
-        for result, user_id in zip(results, batch):
+        for result, uid in zip(results, batch):
             if result == "ok":
                 delivered += 1
             elif result == "blocked":
-                remove_user(user_id)
+                remove_user(uid)
                 removed += 1
                 failed += 1
             else:
                 failed += 1
 
-
-        # progress animation
-        if i % 10 == 0 or i == total_users:
-            percent = int((i / total_users) * 100)
-            try:
-                await progress_msg.edit_text(
-                    f"""🚀 Broadcasting…\n\n"
-                    f"📊 Progress: {percent}%"""
-                )
-            except Exception:
-                pass
-
-# ✅ live progress update every batch
         try:
             await progress_msg.edit_text(
                 f"🚀 Broadcasting...\n\n"
@@ -228,12 +188,11 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ Failed: {failed}\n"
                 f"🗑 Removed: {removed}"
             )
-        except:
+        except Exception:
             pass
 
         await asyncio.sleep(DELAY)
 
-    # ✅ final report
     await progress_msg.edit_text(
         f"✅ Broadcast Completed!\n\n"
         f"👥 Total: {total_users}\n"
@@ -241,40 +200,11 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"❌ Failed: {failed}\n"
         f"🗑 Removed: {removed}"
     )
-    
-    
-    
-    
-    
-    async def send_copy_safe(context, message, user_id):
-    try:
-        await message.copy(chat_id=user_id)
-        return "ok"
-
-    except Forbidden:
-        return "blocked"
-
-    except RetryAfter as e:
-        await asyncio.sleep(e.retry_after)
-        try:
-            await message.copy(chat_id=user_id)
-            return "ok"
-        except:
-            return "failed"
-
-    except (BadRequest, TimedOut, NetworkError):
-        return "failed"
-
-    except Exception as e:
-        logging.error(f"Send error {user_id}: {e}")
-        return "failed"
-
-
 
 
 # ================= USERS COUNT =================
 async def users_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    if update.effective_user.id not in ADMIN_ID:
         return
 
     total = len(get_all_users())
@@ -283,6 +213,8 @@ async def users_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================= MAIN =================
 def main():
+    init_db()
+
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -290,7 +222,7 @@ def main():
     app.add_handler(CommandHandler("users", users_count))
     app.add_handler(ChatJoinRequestHandler(approve_and_send))
 
-    # ✅ AUTO USER CAPTURE — ALWAYS LAST
+    # ⭐ AUTO CAPTURE — MUST BE LAST
     app.add_handler(MessageHandler(filters.ALL, capture_user))
 
     app.run_polling(allowed_updates=["message", "chat_join_request"])
@@ -298,6 +230,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
