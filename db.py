@@ -1,19 +1,21 @@
 import sqlite3
 import logging
-from contextlib import closing
 
 DB_NAME = "users.db"
+
 
 # ================= INIT DB =================
 def init_db():
     try:
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY
                 )
-            """)
+            """
+            )
             conn.commit()
     except Exception as e:
         logging.error(f"DB init error: {e}")
@@ -33,7 +35,7 @@ def add_user(user_id: int):
         logging.error(f"Add user error: {e}")
 
 
-# ================= GET ALL USERS =================
+# ================= GET USERS =================
 def get_all_users():
     try:
         with sqlite3.connect(DB_NAME) as conn:
